@@ -90,6 +90,11 @@ qemu_machines=$("$qemu_bin" -machine help 2>&1) || fail "cannot inspect staged Q
 printf '%s\n' "$qemu_machines" | grep -Eq '^virt[[:space:]]' || fail "staged QEMU does not provide the ARM virt machine"
 qemu_cpus=$("$qemu_bin" -cpu help 2>&1) || fail "cannot inspect staged QEMU CPUs"
 printf '%s\n' "$qemu_cpus" | grep -Eq '^[[:space:]]*host([[:space:]]|$)' || fail "staged QEMU does not expose the host CPU"
+qemu_host_cpu_properties=$("$qemu_bin" -cpu host,help 2>&1) || fail "cannot inspect staged QEMU host CPU properties"
+qemu_supports_nested_virt=0
+if printf '%s\n' "$qemu_host_cpu_properties" | grep -Eq '^[[:space:]]*el2([[:space:]=]|$)'; then
+  qemu_supports_nested_virt=1
+fi
 qemu_displays=$("$qemu_bin" -display help 2>&1) || fail "cannot inspect staged QEMU displays"
 printf '%s\n' "$qemu_displays" | grep -qx 'cocoa' || fail "staged QEMU does not provide the Cocoa display"
 qemu_devices=$("$qemu_bin" -device help 2>&1) || fail "cannot inspect staged QEMU devices"
@@ -811,6 +816,39 @@ if (( host_cpu_count < vcpu_count )); then
 fi
 (( vcpu_count >= 4 )) || fail "the ARM guest requires at least four host CPUs"
 
+# Apple only enables the EL2 nested-virtualization APIs in the macOS kernel
+# starting with the M3 generation of Apple Silicon (M1/M2 lack the enabled
+# hardware path). Detect the host chip generation from its brand string,
+# e.g. "Apple M3 Pro" or "Apple M3 Max", so we only ask QEMU for nested
+# virtualization when the host can actually back it.
+apple_chip_brand=$(sysctl -n machdep.cpu.brand_string 2>/dev/null) || apple_chip_brand=''
+apple_chip_generation=0
+if [[ $apple_chip_brand =~ Apple\ M([0-9]+) ]]; then
+  apple_chip_generation=${BASH_REMATCH[1]}
+fi
+host_supports_nested_virt=0
+(( apple_chip_generation < 3 )) || host_supports_nested_virt=1
+
+case ${OMARCHY_QEMU_GPU_NESTED_VIRT:-auto} in
+  auto)
+    nested_virt_enabled=0
+    if (( host_supports_nested_virt )) && (( qemu_supports_nested_virt )); then
+      nested_virt_enabled=1
+    fi
+    ;;
+  1)
+    (( host_supports_nested_virt )) || fail "OMARCHY_QEMU_GPU_NESTED_VIRT=1 requires an Apple M3 chip or later"
+    (( qemu_supports_nested_virt )) || fail "OMARCHY_QEMU_GPU_NESTED_VIRT=1 requires a staged QEMU with nested virtualization (el2) support"
+    nested_virt_enabled=1
+    ;;
+  0)
+    nested_virt_enabled=0
+    ;;
+  *) fail "OMARCHY_QEMU_GPU_NESTED_VIRT must be 0, 1, or auto" ;;
+esac
+cpu_flag='host,pmu=off'
+(( ! nested_virt_enabled )) || cpu_flag+=',el2=on'
+
 # The launcher publishes one optional Mac folder for the guest. The Swift app
 # canonicalizes and validates the selection first; re-check here so a stray
 # environment value can never export an unsafe tree. Empty means disabled.
@@ -1050,7 +1088,9 @@ qemu_args=(
   -machine 'virt,accel=hvf,gic-version=3'
   # HVF does not provide a usable guest PMU on Apple Silicon. Do not advertise
   # one: Linux otherwise probes the dead device and prints a misleading failure.
-  -cpu 'host,pmu=off'
+  # el2=on is appended above when the host is an Apple M3 (or later) chip and
+  # the staged QEMU supports it, enabling nested virtualization in the guest.
+  -cpu "$cpu_flag"
   -smp "$vcpu_count,sockets=1,cores=$vcpu_count,threads=1"
   -m 4G
   -nodefaults
@@ -1130,6 +1170,7 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
     printf '\n[qemu-gpu] shared folder: disabled' >&2
   fi
   printf '\n[qemu-gpu] port forwarding: %s' "$port_forwarding_summary" >&2
+  printf '\n[qemu-gpu] nested virtualization: %s' "$([[ $nested_virt_enabled == 1 ]] && printf enabled || printf disabled)" >&2
   printf '\n' >&2
   exit 0
 fi
@@ -1147,6 +1188,11 @@ if [[ -n $shared_folder ]]; then
   echo "[qemu-gpu] Shared folder: $shared_folder (guest ~/$shared_folder_name)" >&2
 fi
 echo "[qemu-gpu] Port forwarding: $port_forwarding_summary" >&2
+if (( nested_virt_enabled )); then
+  echo "[qemu-gpu] Nested virtualization: enabled (el2=on)" >&2
+else
+  echo "[qemu-gpu] Nested virtualization: disabled" >&2
+fi
 "$qemu_bin" "${qemu_args[@]}" &
 qemu_pid=$!
 printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
