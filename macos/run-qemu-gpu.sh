@@ -101,16 +101,14 @@ qemu_machines=$("$qemu_bin" -machine help 2>&1) || fail "cannot inspect staged Q
 printf '%s\n' "$qemu_machines" | grep -Eq '^virt[[:space:]]' || fail "staged QEMU does not provide the ARM virt machine"
 qemu_cpus=$("$qemu_bin" -cpu help 2>&1) || fail "cannot inspect staged QEMU CPUs"
 printf '%s\n' "$qemu_cpus" | grep -Eq '^[[:space:]]*host([[:space:]]|$)' || fail "staged QEMU does not expose the host CPU"
-# QEMU has no "-cpu host,help" property listing for ARM hosts (that convention
-# is x86-only); instead probe by requesting el2=on against a minimal machine.
-# A CPU realization failure with this exact property-not-found message means
-# the staged QEMU predates HVF EL2/nested-virtualization support. Any other
-# outcome (a different failure further into machine init, or success) means
-# the property was accepted.
-qemu_supports_nested_virt=1
-qemu_el2_probe=$("$qemu_bin" -machine virt,accel=hvf -cpu host,el2=on -m 128 -nographic 2>&1) || true
-if [[ $qemu_el2_probe == *"Property 'host-arm-cpu.el2' not found"* ]]; then
-  qemu_supports_nested_virt=0
+# QEMU 11.1 added HVF nested-virtualization support on Apple Silicon by wiring
+# the ARM 'virt' board's long-standing "virtualization" property (previously
+# KVM-only) to also enable HVF's EL2/vGIC emulation. List that machine's
+# options to detect whether the staged QEMU is new enough to expose it.
+qemu_virt_machine_options=$("$qemu_bin" -machine virt,help 2>&1) || fail "cannot inspect staged QEMU virt machine options"
+qemu_supports_nested_virt=0
+if printf '%s\n' "$qemu_virt_machine_options" | grep -Eq '^[[:space:]]*virtualization='; then
+  qemu_supports_nested_virt=1
 fi
 qemu_displays=$("$qemu_bin" -display help 2>&1) || fail "cannot inspect staged QEMU displays"
 printf '%s\n' "$qemu_displays" | grep -qx 'cocoa' || fail "staged QEMU does not provide the Cocoa display"
@@ -855,7 +853,7 @@ case ${OMARCHY_QEMU_GPU_NESTED_VIRT:-auto} in
     ;;
   1)
     (( host_supports_nested_virt )) || fail "OMARCHY_QEMU_GPU_NESTED_VIRT=1 requires an Apple M3 chip or later"
-    (( qemu_supports_nested_virt )) || fail "OMARCHY_QEMU_GPU_NESTED_VIRT=1 requires a staged QEMU with nested virtualization (el2) support"
+    (( qemu_supports_nested_virt )) || fail "OMARCHY_QEMU_GPU_NESTED_VIRT=1 requires a staged QEMU with virt-machine nested virtualization support (QEMU 11.1 or newer)"
     nested_virt_enabled=1
     ;;
   0)
@@ -863,8 +861,7 @@ case ${OMARCHY_QEMU_GPU_NESTED_VIRT:-auto} in
     ;;
   *) fail "OMARCHY_QEMU_GPU_NESTED_VIRT must be 0, 1, or auto" ;;
 esac
-cpu_flag='host,pmu=off'
-(( ! nested_virt_enabled )) || cpu_flag+=',el2=on'
+(( ! nested_virt_enabled )) || qemu_machine+=',virtualization=on'
 
 # The launcher publishes one optional Mac folder for the guest. The Swift app
 # canonicalizes and validates the selection first; re-check here so a stray
@@ -1310,12 +1307,13 @@ esac
 
 qemu_args=(
   -name 'Try Omarchy'
+  # virtualization=on is appended to $qemu_machine above when the host is an
+  # Apple M3 (or later) chip and the staged QEMU supports it, enabling HVF
+  # nested virtualization (EL2/vGIC) for the guest.
   -machine "$qemu_machine"
   # HVF does not provide a usable guest PMU on Apple Silicon. Do not advertise
   # one: Linux otherwise probes the dead device and prints a misleading failure.
-  # el2=on is appended above when the host is an Apple M3 (or later) chip and
-  # the staged QEMU supports it, enabling nested virtualization in the guest.
-  -cpu "$cpu_flag"
+  -cpu 'host,pmu=off'
   -smp "$vcpu_count,sockets=1,cores=$vcpu_count,threads=1"
   -m 4G
   -nodefaults
@@ -1414,7 +1412,7 @@ if [[ -n $shared_folder ]]; then
 fi
 echo "[qemu-gpu] Port forwarding: $port_forwarding_summary" >&2
 if (( nested_virt_enabled )); then
-  echo "[qemu-gpu] Nested virtualization: enabled (el2=on)" >&2
+  echo "[qemu-gpu] Nested virtualization: enabled (virtualization=on)" >&2
 else
   echo "[qemu-gpu] Nested virtualization: disabled" >&2
 fi
