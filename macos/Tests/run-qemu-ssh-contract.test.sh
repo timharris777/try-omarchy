@@ -76,6 +76,14 @@ case " $* " in
   *' -accel help '*) printf '%s\n' hvf ;;
   *' -machine help '*) printf '%s\n' 'virt                 ARM Virtual Machine' ;;
   *' -cpu help '*) printf '%s\n' '  host' ;;
+  *' -machine virt,help '*)
+    if [[ ${FAKE_QEMU_NESTED_VIRT_SUPPORTED:-1} == 1 ]]; then
+      printf '%s\n' 'virt-11.1-machine options:' \
+        '  virtualization=<bool>  - Set on/off to enable/disable emulating a guest CPU which implements the ARM Virtualization Extensions'
+    else
+      printf '%s\n' 'virt-10.0-machine options:'
+    fi
+    ;;
   *' -display help '*) printf '%s\n' cocoa ;;
   *' -device help '*)
     for device in \
@@ -273,6 +281,10 @@ if [[ $# == 2 && $1 == -n && ($2 == hw.logicalcpu || $2 == hw.ncpu) ]]; then
   printf '8\n'
   exit 0
 fi
+if [[ $# == 2 && $1 == -n && $2 == machdep.cpu.brand_string ]]; then
+  printf '%s\n' "${FAKE_CPU_BRAND:-Apple M3 Max}"
+  exit 0
+fi
 exec /usr/sbin/sysctl "$@"
 SH
 chmod 755 "$shim_dir"/*
@@ -324,7 +336,7 @@ run_scenario() {
 run_scenario disabled 0 ''
 disabled_qemu=$(<"$test_root/disabled/qemu.log")
 assert_line_pair "$test_root/disabled/qemu.log" -machine \
-  'virt,accel=hvf,gic-version=3'
+  'virt,accel=hvf,gic-version=3,virtualization=on'
 assert_not_contains "$disabled_qemu" gic-version=2
 assert_line_pair "$test_root/disabled/qemu.log" -netdev 'user,id=omarchy-net'
 assert_line_pair "$test_root/disabled/qemu.log" -kernel "$persistent_root/boot/kernel"
@@ -335,6 +347,32 @@ assert_contains "$disabled_qemu" \
   'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=on,swap-opt-cmd=off'
 assert_contains "$(<"$test_root/disabled/storage.log")" select-existing
 assert_contains "$(<"$test_root/disabled/storage.log")" create
+assert_line_pair "$test_root/disabled/qemu.log" -cpu 'host,pmu=off'
+assert_contains "$(<"$test_root/disabled/stderr")" 'Nested virtualization: enabled'
+
+run_scenario nested-virt-old-chip 0 '' FAKE_CPU_BRAND='Apple M2 Pro'
+old_chip_qemu=$(<"$test_root/nested-virt-old-chip/qemu.log")
+assert_line_pair "$test_root/nested-virt-old-chip/qemu.log" -machine \
+  'virt,accel=hvf,gic-version=3'
+assert_not_contains "$old_chip_qemu" virtualization=on
+assert_contains "$(<"$test_root/nested-virt-old-chip/stderr")" 'Nested virtualization: disabled'
+
+run_scenario nested-virt-unsupported-qemu 0 '' FAKE_QEMU_NESTED_VIRT_SUPPORTED=0
+unsupported_qemu_qemu=$(<"$test_root/nested-virt-unsupported-qemu/qemu.log")
+assert_line_pair "$test_root/nested-virt-unsupported-qemu/qemu.log" -machine \
+  'virt,accel=hvf,gic-version=3'
+assert_not_contains "$unsupported_qemu_qemu" virtualization=on
+
+run_scenario nested-virt-forced-off 0 '' OMARCHY_QEMU_GPU_NESTED_VIRT=0
+forced_off_qemu=$(<"$test_root/nested-virt-forced-off/qemu.log")
+assert_line_pair "$test_root/nested-virt-forced-off/qemu.log" -machine \
+  'virt,accel=hvf,gic-version=3'
+assert_not_contains "$forced_off_qemu" virtualization=on
+
+run_scenario nested-virt-forced-on-unsupported 1 '' \
+  OMARCHY_QEMU_GPU_NESTED_VIRT=1 FAKE_CPU_BRAND='Apple M2 Pro'
+assert_contains "$(<"$test_root/nested-virt-forced-on-unsupported/stderr")" \
+  'requires an Apple M3 chip or later'
 
 run_scenario non-immersive 0 '' OMARCHY_QEMU_GPU_IMMERSIVE=0
 non_immersive_qemu=$(<"$test_root/non-immersive/qemu.log")
@@ -417,7 +455,7 @@ run_scenario recovery-allowed 0 '' \
   OMARCHY_QEMU_GPU_ALLOW_BOOT_RECOVERY=1
 recovery_qemu=$(<"$test_root/recovery-allowed/recovery.log")
 assert_line_pair "$test_root/recovery-allowed/recovery.log" -machine \
-  'virt,accel=hvf,gic-version=3'
+  'virt,accel=hvf,gic-version=3,virtualization=on'
 assert_not_contains "$recovery_qemu" gic-version=2
 assert_line_pair "$test_root/recovery-allowed/recovery.log" -drive \
   "if=none,id=omarchy-recovery-root,file=$recovery_root/rootfs.ext4,format=raw,media=disk,cache=none,readonly=on"
