@@ -76,12 +76,12 @@ case " $* " in
   *' -accel help '*) printf '%s\n' hvf ;;
   *' -machine help '*) printf '%s\n' 'virt                 ARM Virtual Machine' ;;
   *' -cpu help '*) printf '%s\n' '  host' ;;
-  *' -cpu host,help '*)
+  *' -cpu host,el2=on '*)
     if [[ ${FAKE_QEMU_EL2_SUPPORTED:-1} == 1 ]]; then
-      printf '%s\n' '  pmu=<bool> (on/off)' '  el2=<bool> (on/off)'
-    else
-      printf '%s\n' '  pmu=<bool> (on/off)'
+      exit 1
     fi
+    printf '%s\n' "Try Omarchy: can't apply global host-arm-cpu.el2=on: Property 'host-arm-cpu.el2' not found" >&2
+    exit 1
     ;;
   *' -display help '*) printf '%s\n' cocoa ;;
   *' -device help '*)

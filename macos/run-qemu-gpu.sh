@@ -101,10 +101,16 @@ qemu_machines=$("$qemu_bin" -machine help 2>&1) || fail "cannot inspect staged Q
 printf '%s\n' "$qemu_machines" | grep -Eq '^virt[[:space:]]' || fail "staged QEMU does not provide the ARM virt machine"
 qemu_cpus=$("$qemu_bin" -cpu help 2>&1) || fail "cannot inspect staged QEMU CPUs"
 printf '%s\n' "$qemu_cpus" | grep -Eq '^[[:space:]]*host([[:space:]]|$)' || fail "staged QEMU does not expose the host CPU"
-qemu_host_cpu_properties=$("$qemu_bin" -cpu host,help 2>&1) || fail "cannot inspect staged QEMU host CPU properties"
-qemu_supports_nested_virt=0
-if printf '%s\n' "$qemu_host_cpu_properties" | grep -Eq '^[[:space:]]*el2([[:space:]=]|$)'; then
-  qemu_supports_nested_virt=1
+# QEMU has no "-cpu host,help" property listing for ARM hosts (that convention
+# is x86-only); instead probe by requesting el2=on against a minimal machine.
+# A CPU realization failure with this exact property-not-found message means
+# the staged QEMU predates HVF EL2/nested-virtualization support. Any other
+# outcome (a different failure further into machine init, or success) means
+# the property was accepted.
+qemu_supports_nested_virt=1
+qemu_el2_probe=$("$qemu_bin" -machine virt,accel=hvf -cpu host,el2=on -m 128 -nographic 2>&1) || true
+if [[ $qemu_el2_probe == *"Property 'host-arm-cpu.el2' not found"* ]]; then
+  qemu_supports_nested_virt=0
 fi
 qemu_displays=$("$qemu_bin" -display help 2>&1) || fail "cannot inspect staged QEMU displays"
 printf '%s\n' "$qemu_displays" | grep -qx 'cocoa' || fail "staged QEMU does not provide the Cocoa display"
