@@ -31,6 +31,36 @@ private final class PermissionActionButton: NSButton {
     }
 }
 
+final class PermissionCardView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureLayer()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureLayer()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorderColor()
+    }
+
+    private func configureLayer() {
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.borderWidth = 1
+        updateBorderColor()
+    }
+
+    private func updateBorderColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+}
+
 private final class LinkCursorTextField: NSTextField {
     override func resetCursorRects() {
         super.resetCursorRects()
@@ -60,7 +90,7 @@ private final class LinkCursorTextField: NSTextField {
 
 @MainActor
 final class StartMenuWindow: NSObject, NSWindowDelegate {
-    private let window: NSWindow
+    private(set) var window: NSWindow
     private let content = NSView()
     private let accessibilityStatus: () -> Bool
     private let microphoneStatus: () -> MicrophoneAuthorizationState
@@ -196,8 +226,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     func show() {
+        prepareForPresentation(
+            visibleFrame: (window.screen ?? NSScreen.main)?.visibleFrame
+        )
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func prepareForPresentation(visibleFrame: NSRect?) {
         render()
-        if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
+        if let visibleFrame {
             // The menu carries six rows once a resettable VM can choose where it
             // lives. At 690 the launch button cleared the bottom edge by 15pt,
             // which any difference in system font metrics turned into a button
@@ -205,9 +244,6 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             let availableHeight = max(480, visibleFrame.height - 32)
             window.setContentSize(NSSize(width: 600, height: min(760, availableHeight)))
         }
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     func refreshPermissionStatus() {
@@ -285,9 +321,23 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Reset Omarchy to continue"
-        alert.informativeText = "This VM was created by a different Try Omarchy build. Reset Omarchy to use this version. Resetting permanently erases everything in the VM."
+        alert.informativeText = StartMenuPresentation.incompatibleWorkspaceDetail
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
+    }
+
+    /// Requests one-shot consent for legacy boot-file pairing. This remains a
+    /// synchronous application-modal decision so the launcher cannot start in
+    /// the gap between presenting the explanation and receiving the answer.
+    func confirmBootRecovery() -> Bool {
+        guard launchInProgress else { return false }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = StartMenuPresentation.bootRecoveryConfirmationTitle
+        alert.informativeText = StartMenuPresentation.bootRecoveryConfirmationDetail
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Continue")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     func launchDidFail(errorMessage: String) {
@@ -484,11 +534,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             row.widthAnchor.constraint(equalTo: permissionRows.widthAnchor).isActive = true
         }
 
-        let permissionCard = NSView()
-        permissionCard.wantsLayer = true
-        permissionCard.layer?.cornerRadius = 12
-        permissionCard.layer?.borderWidth = 1
-        permissionCard.layer?.borderColor = NSColor.separatorColor.cgColor
+        let permissionCard = PermissionCardView(frame: .zero)
         permissionCard.addSubview(permissionRows)
         NSLayoutConstraint.activate([
             permissionRows.leadingAnchor.constraint(equalTo: permissionCard.leadingAnchor, constant: 20),
@@ -744,6 +790,9 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             explanation.font = .systemFont(ofSize: 12)
             explanation.textColor = .secondaryLabelColor
             explanation.maximumNumberOfLines = 2
+            explanation.identifier = NSUserInterfaceItemIdentifier(
+                "permission-detail-\(symbolName)"
+            )
             explanations = [explanation]
         }
 
@@ -751,6 +800,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 3
+        for explanation in explanations {
+            explanation.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            explanation.trailingAnchor.constraint(
+                lessThanOrEqualTo: labels.trailingAnchor
+            ).isActive = true
+        }
 
         let statusText = granted ? statusLabels.granted : statusLabels.denied
         let statusFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
@@ -867,6 +922,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         )
         button.toolTip = text
         button.identifier = NSUserInterfaceItemIdentifier(identifier)
+        button.cell?.lineBreakMode = .byTruncatingMiddle
         button.translatesAutoresizingMaskIntoConstraints = false
         button.heightAnchor.constraint(greaterThanOrEqualToConstant: 16).isActive = true
         return button

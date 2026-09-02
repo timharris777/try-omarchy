@@ -1,4 +1,8 @@
-# Try Omarchy
+<p align="center">
+  <img src="macos/OmarchyIcon.svg" width="128" height="128" alt="Try Omarchy logo">
+</p>
+
+<h1 align="center">Try Omarchy</h1>
 
 Run the upstream [Omarchy](https://github.com/basecamp/omarchy) desktop as a native, hardware-accelerated app on an Apple Silicon Mac.
 
@@ -135,7 +139,7 @@ port. The `dtc` mirror should be reverted once kernel.org returns.
 2. Open the DMG and drag **Try Omarchy** to **Applications**.
 3. Launch **Try Omarchy** from Applications.
 
-Every launch begins at the start menu. **Immersive** is on by default and controls only the Full Screen presentation. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Whenever the Omarchy window is focused, Command belongs to the guest as Super in either mode; Accessibility permission lets system shortcuts such as Command-Space reach it before macOS. Microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+Every launch begins at the start menu. **Immersive** is on by default, so Omarchy opens Full Screen with the Mac menu bar and Dock hidden. Turn it off to open a resizable window; if you later enter Full Screen, the Mac menu bar and Dock remain available at the screen edges. Whenever the Omarchy window is focused, Command belongs to the guest as Super in either mode; Accessibility permission lets system shortcuts such as Command-Space reach it before macOS. Microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
 Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
 Shutting down Omarchy closes the app and leaves it closed.
@@ -251,7 +255,31 @@ the same Mac; guest SSH authentication is still required.
 
 ## Data and updates
 
-Normal launches keep one persistent VM under `~/Library/Application Support/Try Omarchy/VM/v1`. Removing the app does not remove this data. The start menu can reset it, and requires confirmation before replacing a disk that is incompatible with a new factory guest build.
+Normal launches keep one persistent VM under
+`~/Library/Application Support/Try Omarchy/VM/v1`. Removing or updating the app
+does not remove or replace this data. An existing VM keeps both its writable
+disk and the exact kernel, initramfs, and base command line that were paired
+with that disk. A newer app's bundled factory image is used only to create a
+new VM, after a confirmed **Reset Omarchy**, or for an ephemeral launch.
+
+VMs created before paired boot files were introduced are preserved too. On the
+first launch that needs them, Try Omarchy explains the transition in a
+**Continue** / **Cancel** dialog before starting recovery. Continue performs a
+one-time recovery boot: it mounts the saved disk read-only, copies the installed
+kernel and initramfs from `/boot` into private VM storage, validates them, and
+then shuts the recovery boot down. It does not start the saved userspace with
+the newer app's kernel, reset the VM, or upgrade Omarchy. Cancel returns to the
+start menu. Reset is still required when the saved storage or boot format
+itself cannot be safely read.
+
+Use Omarchy's built-in updater for the updates it supports inside this ARM
+guest. Ordinary guest packages can advance without replacing the VM, but Try
+Omarchy currently pins its direct-boot kernel and headers, packaged
+`try-omarchy-runtime`, and reviewed compatibility backports in a prioritized
+local repository. Installing a newer Try Omarchy app therefore does not apply
+all of that app's factory-image changes to an existing VM, and an in-guest
+update should not be assumed to reproduce them. A confirmed reset is the
+deliberate, destructive way to start again from the newest bundled factory.
 
 ### Choosing where the VM lives
 
